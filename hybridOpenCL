@@ -1,0 +1,354 @@
+#include <iostream>
+#include <cstdlib>
+#include <ctime>
+#include <vector>
+#include <fstream>
+#include <mpi.h>
+#include <CL/cl.h>  // OpenCL header
+using namespace std;
+
+const int MATRIX_SIZE = 2048;  // size of the matrix
+
+// Function to multiply matrices using OpenCL
+void matrix_multiply_opencl(const vector<vector<int>>& A, const vector<vector<int>>& B, 
+                           vector<vector<int>>& C, int start_row, int end_row) {
+    cl_int err;
+    
+    // Get platform
+    cl_platform_id platform;
+    err = clGetPlatformIDs(1, &platform, NULL);
+    if (err != CL_SUCCESS) {
+        cerr << "Error getting platform ID: " << err << endl;
+        exit(1);
+    }
+
+    // Get device3
+    cl_device_id device;
+    err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 1, &device, NULL);
+    if (err != CL_SUCCESS) {
+        // If GPU not available, try CPU
+        err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_CPU, 1, &device, NULL);
+        if (err != CL_SUCCESS) {
+            cerr << "Error getting device ID: " << err << endl;
+            exit(1);
+        }
+        cout << "Using CPU as OpenCL device" << endl;
+    } else {
+        cout << "Using GPU as OpenCL device" << endl;
+    }
+
+    // Create context
+    cl_context context = clCreateContext(NULL, 1, &device, NULL, NULL, &err);
+    if (err != CL_SUCCESS) {
+        cerr << "Error creating context: " << err << endl;
+        exit(1);
+    }
+
+    // Create command queue
+    cl_command_queue queue = clCreateCommandQueue(context, device, 0, &err);
+    if (err != CL_SUCCESS) {
+        cerr << "Error creating command queue: " << err << endl;
+        exit(1);
+    }
+
+    // Load OpenCL kernel source
+    const char* kernel_source = R"(
+        __kernel void matmul(__global int* A, __global int* B, __global int* C, int N) {
+            int i = get_global_id(0);
+            int j = get_global_id(1);
+            if (i < N && j < N) {
+                int sum = 0;
+                for (int k = 0; k < N; k++) {
+                    sum += A[i * N + k] * B[k * N + j];
+                }
+                C[i * N + j] = sum;
+            }
+        }
+    )";
+    
+    // Create the OpenCL program
+    cl_program program = clCreateProgramWithSource(context, 1, &kernel_source, NULL, &err);
+    if (err != CL_SUCCESS) {
+        cerr << "Error creating program: " << err << endl;
+        exit(1);
+    }
+
+    // Build the program
+    err = clBuildProgram(program, 1, &device, NULL, NULL, NULL);
+    if (err != CL_SUCCESS) {
+        size_t log_size;
+        clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size);
+        char* log = new char[log_size];
+        clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, log_size, log, NULL);
+        cerr << "Error building program: " << err << endl;
+        cerr << "Build log: " << log << endl;
+        delete[] log;
+        exit(1);
+    }
+
+    // Create kernel
+    cl_kernel kernel = clCreateKernel(program, "matmul", &err);
+    if (err != CL_SUCCESS) {
+        cerr << "Error creating kernel: " << err << endl;
+        exit(1);
+    }
+
+    // Calculate the number of rows to process
+    int num_rows = end_row - start_row;
+    
+    // Flatten the matrices for OpenCL
+    vector<int> A_flat(MATRIX_SIZE * MATRIX_SIZE);
+    vector<int> B_flat(MATRIX_SIZE * MATRIX_SIZE);
+    vector<int> C_flat(num_rows * MATRIX_SIZE, 0);
+    
+    // Flatten matrix A
+    for (int i = 0; i < MATRIX_SIZE; i++) {
+        for (int j = 0; j < MATRIX_SIZE; j++) {
+            A_flat[i * MATRIX_SIZE + j] = A[i][j];
+        }
+    }
+    
+    // Flatten matrix B
+    for (int i = 0; i < MATRIX_SIZE; i++) {
+        for (int j = 0; j < MATRIX_SIZE; j++) {
+            B_flat[i * MATRIX_SIZE + j] = B[i][j];
+        }
+    }
+    
+    // Create buffers
+    cl_mem A_buf = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                                 sizeof(int) * A_flat.size(), A_flat.data(), &err);
+    if (err != CL_SUCCESS) {
+        cerr << "Error creating buffer A: " << err << endl;
+        exit(1);
+    }
+    
+    cl_mem B_buf = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                                 sizeof(int) * B_flat.size(), B_flat.data(), &err);
+    if (err != CL_SUCCESS) {
+        cerr << "Error creating buffer B: " << err << endl;
+        exit(1);
+    }
+    
+    cl_mem C_buf = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
+                                 sizeof(int) * C_flat.size(), NULL, &err);
+    if (err != CL_SUCCESS) {
+        cerr << "Error creating buffer C: " << err << endl;
+        exit(1);
+    }
+    
+    // Set kernel arguments
+    err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &A_buf);
+    if (err != CL_SUCCESS) {
+        cerr << "Error setting kernel argument A_buf: " << err << endl;
+        exit(1);
+    }
+    
+    err = clSetKernelArg(kernel, 1, sizeof(cl_mem), &B_buf);
+    if (err != CL_SUCCESS) {
+        cerr << "Error setting kernel argument B_buf: " << err << endl;
+        exit(1);
+    }
+    
+    err = clSetKernelArg(kernel, 2, sizeof(cl_mem), &C_buf);
+    if (err != CL_SUCCESS) {
+        cerr << "Error setting kernel argument C_buf: " << err << endl;
+        exit(1);
+    }
+    
+    err = clSetKernelArg(kernel, 3, sizeof(int), &MATRIX_SIZE);
+    if (err != CL_SUCCESS) {
+        cerr << "Error setting kernel argument MATRIX_SIZE: " << err << endl;
+        exit(1);
+    }
+    
+    // Define work sizes
+    size_t global_work_size[2] = { (size_t)num_rows, (size_t)MATRIX_SIZE };
+    size_t local_work_size[2] = { 16, 16 };  // Adjust based on your GPU capabilities
+    
+    // Execute the kernel
+    err = clEnqueueNDRangeKernel(queue, kernel, 2, NULL, global_work_size, local_work_size, 0, NULL, NULL);
+    if (err != CL_SUCCESS) {
+        cerr << "Error enqueuing kernel: " << err << endl;
+        exit(1);
+    }
+    
+    // Read the result
+    err = clEnqueueReadBuffer(queue, C_buf, CL_TRUE, 0, sizeof(int) * C_flat.size(),
+                             C_flat.data(), 0, NULL, NULL);
+    if (err != CL_SUCCESS) {
+        cerr << "Error reading results: " << err << endl;
+        exit(1);
+    }
+    
+    // Copy the results back to the C matrix
+    for (int i = 0; i < num_rows; i++) {
+        for (int j = 0; j < MATRIX_SIZE; j++) {
+            C[start_row + i][j] = C_flat[i * MATRIX_SIZE + j];
+        }
+    }
+    
+    // Clean up
+    clReleaseMemObject(A_buf);
+    clReleaseMemObject(B_buf);
+    clReleaseMemObject(C_buf);
+    clReleaseKernel(kernel);
+    clReleaseProgram(program);
+    clReleaseCommandQueue(queue);
+    clReleaseContext(context);
+}
+
+// Sequential fallback for systems without OpenCL
+void matrix_multiply_sequential(const vector<vector<int>>& A, const vector<vector<int>>& B, 
+                              vector<vector<int>>& C, int start_row, int end_row) {
+    for (int i = start_row; i < end_row; i++) {
+        for (int j = 0; j < MATRIX_SIZE; j++) {
+            C[i][j] = 0;
+            for (int k = 0; k < MATRIX_SIZE; k++) {
+                C[i][j] += A[i][k] * B[k][j];
+            }
+        }
+    }
+}
+
+int main(int argc, char** argv) {
+    int rank, size;
+    double start_time, end_time;
+    
+    // Initialize MPI environment
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    
+    // Master process (rank 0) will initialize the matrices
+    vector<vector<int>> A(MATRIX_SIZE, vector<int>(MATRIX_SIZE, 0));
+    vector<vector<int>> B(MATRIX_SIZE, vector<int>(MATRIX_SIZE, 0));
+    vector<vector<int>> C(MATRIX_SIZE, vector<int>(MATRIX_SIZE, 0));
+    vector<vector<int>> local_C(MATRIX_SIZE, vector<int>(MATRIX_SIZE, 0));
+
+    if (rank == 0) {
+        cout << "Matrix size: " << MATRIX_SIZE << "x" << MATRIX_SIZE << endl;
+        cout << "Number of processes: " << size << endl;
+        
+        // Initialize random seed
+        srand(time(NULL));
+
+        // Fill matrices A and B with random integers
+        for (int i = 0; i < MATRIX_SIZE; i++) {
+            for (int j = 0; j < MATRIX_SIZE; j++) {
+                A[i][j] = rand() % 100;  // Using smaller numbers to avoid overflow
+                B[i][j] = rand() % 100;
+            }
+        }
+        
+        cout << "Matrices initialized. Starting multiplication..." << endl;
+    }
+    
+    // Create flattened arrays for broadcasting
+    vector<int> A_flat(MATRIX_SIZE * MATRIX_SIZE);
+    vector<int> B_flat(MATRIX_SIZE * MATRIX_SIZE);
+    
+    if (rank == 0) {
+        // Flatten the matrices for MPI communication
+        for (int i = 0; i < MATRIX_SIZE; i++) {
+            for (int j = 0; j < MATRIX_SIZE; j++) {
+                A_flat[i * MATRIX_SIZE + j] = A[i][j];
+                B_flat[i * MATRIX_SIZE + j] = B[i][j];
+            }
+        }
+    }
+    
+    // Broadcast the flattened matrices
+    MPI_Bcast(A_flat.data(), MATRIX_SIZE * MATRIX_SIZE, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(B_flat.data(), MATRIX_SIZE * MATRIX_SIZE, MPI_INT, 0, MPI_COMM_WORLD);
+    
+    // Unflatten the matrices on each process
+    if (rank != 0) {
+        for (int i = 0; i < MATRIX_SIZE; i++) {
+            for (int j = 0; j < MATRIX_SIZE; j++) {
+                A[i][j] = A_flat[i * MATRIX_SIZE + j];
+                B[i][j] = B_flat[i * MATRIX_SIZE + j];
+            }
+        }
+    }
+
+    // Start timing
+    MPI_Barrier(MPI_COMM_WORLD);
+    start_time = MPI_Wtime();
+
+    // Calculate rows for each process
+    int rows_per_process = MATRIX_SIZE / size;
+    int start_row = rank * rows_per_process;
+    int end_row = (rank == size - 1) ? MATRIX_SIZE : start_row + rows_per_process;
+
+    // Each process computes its portion of the result matrix
+    try {
+        // Try OpenCL multiplication first
+        matrix_multiply_opencl(A, B, local_C, start_row, end_row);
+        cout << "Process " << rank << " completed OpenCL computation for rows " 
+             << start_row << " to " << end_row-1 << endl;
+    } catch (const exception& e) {
+        // Fall back to sequential multiplication if OpenCL fails
+        cout << "Process " << rank << " fell back to sequential computation: " << e.what() << endl;
+        matrix_multiply_sequential(A, B, local_C, start_row, end_row);
+    }
+
+    // Prepare data for gathering
+    vector<int> local_result((end_row - start_row) * MATRIX_SIZE);
+    for (int i = start_row; i < end_row; i++) {
+        for (int j = 0; j < MATRIX_SIZE; j++) {
+            local_result[(i - start_row) * MATRIX_SIZE + j] = local_C[i][j];
+        }
+    }
+    
+    // Prepare to receive data
+    vector<int> recv_counts(size);
+    vector<int> displacements(size);
+    
+    for (int i = 0; i < size; i++) {
+        int rows = (i == size - 1) ? (MATRIX_SIZE - i * rows_per_process) : rows_per_process;
+        recv_counts[i] = rows * MATRIX_SIZE;
+        displacements[i] = i * rows_per_process * MATRIX_SIZE;
+    }
+    
+    // Gather all results to process 0
+    vector<int> C_flat(MATRIX_SIZE * MATRIX_SIZE);
+    MPI_Gatherv(local_result.data(), (end_row - start_row) * MATRIX_SIZE, MPI_INT,
+                C_flat.data(), recv_counts.data(), displacements.data(), MPI_INT, 0, MPI_COMM_WORLD);
+
+    // End timing
+    MPI_Barrier(MPI_COMM_WORLD);
+    end_time = MPI_Wtime();
+    
+    // Master process handles the output
+    if (rank == 0) {
+        // Convert the flat C back to 2D
+        for (int i = 0; i < MATRIX_SIZE; i++) {
+            for (int j = 0; j < MATRIX_SIZE; j++) {
+                C[i][j] = C_flat[i * MATRIX_SIZE + j];
+            }
+        }
+        
+        cout << "Time taken: " << end_time - start_time << " seconds" << endl;
+
+        // Write the resultant matrix C to a file
+        ofstream outputFile("mpi_result.txt");
+
+        if (outputFile.is_open()) {
+            for (int i = 0; i < MATRIX_SIZE; i++) {
+                for (int j = 0; j < MATRIX_SIZE; j++) {
+                    outputFile << C[i][j] << " ";
+                }
+                outputFile << "\n";
+            }
+            outputFile.close();
+            cout << "The final result of matrix multiplication (C matrix) has been written to mpi_result.txt" << endl;
+        } else {
+            cerr << "Unable to open file for writing." << endl;
+        }
+    }
+
+    // Finalize MPI
+    MPI_Finalize();
+    return 0;
+}

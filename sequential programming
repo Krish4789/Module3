@@ -1,0 +1,76 @@
+#include <iostream> 
+#include <cstdlib> 
+#include <ctime> 
+#include <vector> 
+#include <fstream> 
+using namespace std; 
+#define N 2048    //size of the matrix 
+//Function to multiply two matrices A and B, and storing the result in matrix C 
+void matrix_multiply(const vector<vector<int>>& A, const vector<vector<int>>& B, vector<vector<int>>& C) { 
+for (int i = 0; i < N; i++)  //Looping through each row of matrix A 
+{ 
+for (int j = 0; j < N; j++)     //Looping through each column of matrix B 
+{ 
+C[i][j] = 0;        
+            for (int k = 0; k < N; k++)    // Multiply corresponding elements of row i in A and column j in B 
+            { 
+                C[i][j] += A[i][k] * B[k][j];  // Add the result to C[i][j]  
+            } 
+        } 
+    } 
+} 
+ 
+int main()  
+{ 
+    // Declare matrices A, B, and C as vectors of vectors 
+    // Using vectors because they are dynamic and handle memory automatically (2D Array). 
+    vector<vector<int>> A(N, vector<int>(N));  
+    vector<vector<int>> B(N, vector<int>(N));  
+    vector<vector<int>> C(N, vector<int>(N)); // Resultant Matrix C 
+ 
+    srand(time(NULL)); // This ensures different random numbers each time the program runs. 
+ 
+    // Fill matrices A and B with random integers between 0 and 999 
+    for (int i = 0; i < N; i++)  
+    { 
+        for (int j = 0; j < N; j++)  
+        { 
+            A[i][j] = rand() % 1000;  
+            B[i][j] = rand() % 1000;  
+        } 
+    } 
+    // Start the timer to measure how long the multiplication takes 
+    clock_t start = clock();  
+ 
+    matrix_multiply(A, B, C); // Perform matrix multiplication 
+ 
+    clock_t end = clock(); // End the timer 
+ 
+    // Calculate the time taken in seconds 
+    double time_taken = (clock() - start) / (double)CLOCKS_PER_SEC; 
+    cout << "Time taken: " << time_taken << " seconds\n"; // Print the time taken 
+ 
+    // Write the resultant matrix C to a file named "sequential.txt" using ofstream library 
+    ofstream outputFile("sequential.txt");      // Create an output file stream and open the file for writing 
+ 
+    // Check if the file was opened successfully 
+    if (outputFile.is_open())  
+    {  
+        for (int i = 0; i < N; i++)         // Loop through each row of matrix C 
+        { 
+            for (int j = 0; j < N; j++)     // Loop through each column of matrix C 
+            { 
+                outputFile << C[i][j] << " "; // Writing each element to the file 
+            } 
+            outputFile << "\n";                // Move to the next row in the file 
+        } 
+        outputFile.close();                    // Close the file 
+        cout << "The final result of matrix multiplication (C matrix)  has been written to sequential.txt\n"; 
+    }  
+    else  
+    { 
+        cerr << "Unable to open file for writing.\n"; // Error message if file cannot be opened 
+    } 
+ 
+    return 0; 
+}

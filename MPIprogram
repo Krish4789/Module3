@@ -1,0 +1,106 @@
+#include <iostream>
+#include <cstdlib>
+#include <ctime>
+#include <vector>
+#include <fstream>
+#include <mpi.h>
+using namespace std;
+
+#define N 64  // size of the matrix
+
+// Function to multiply a portion of matrices A and B, storing the result in matrixA C
+void matrix_multiply_partial(const vector<vector<int>>& A, const vector<vector<int>>& B, 
+                            vector<vector<int>>& C, int start_row, int end_row) {
+    for (int i = start_row; i < end_row; i++) {
+        for (int j = 0; j < N; j++) {
+            C[i][j] = 0;
+            for (int k = 0; k < N; k++) {
+                C[i][j] += A[i][k] * B[k][j];
+            }
+        }
+    }
+}
+
+int main(int argc, char** argv) {
+    int rank, size;
+    double start_time, end_time;
+    
+    // Initialize MPI environment
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    
+    // Calculate how many rows each process will handle
+    int rows_per_process = N / size;
+    int start_row = rank * rows_per_process;
+    int end_row = (rank == size - 1) ? N : start_row + rows_per_process;
+    
+    // Master process (rank 0) will initialize the matrices
+    vector<vector<int>> A(N, vector<int>(N));
+    vector<vector<int>> B(N, vector<int>(N));
+    vector<vector<int>> C(N, vector<int>(N));
+    
+    if (rank == 0) {
+        cout << "Matrix size: " << N << "x" << N << endl;
+        cout << "Number of processes: " << size << endl;
+        
+        // Initialize random seed
+        srand(time(NULL));
+        
+        // Fill matrices A and B with random integers between 0 and 999
+        for (int i = 0; i < N; i++) {
+            for (int j = 0; j < N; j++) {
+                A[i][j] = rand() % 1000;
+                B[i][j] = rand() % 1000;
+            }
+        }
+        
+        cout << "Matrices initialized. Starting multiplication..." << endl;
+    }
+    
+    // Broadcast matrices A and B to all processes
+    for (int i = 0; i < N; i++) {
+        MPI_Bcast(A[i].data(), N, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Bcast(B[i].data(), N, MPI_INT, 0, MPI_COMM_WORLD);
+    }
+    
+    // Start timing
+    start_time = MPI_Wtime();
+    
+    // Each process computes its portion of the result
+    matrix_multiply_partial(A, B, C, start_row, end_row);
+    
+    // Gather results back to process 0
+    for (int i = 0; i < N; i++) {
+        MPI_Bcast(C[i].data(), N, MPI_INT, i / rows_per_process, MPI_COMM_WORLD);
+    }
+    
+    // End timing
+    end_time = MPI_Wtime();
+    
+    // Master process handles the output
+    if (rank == 0) {
+        cout << "Time taken: " << end_time - start_time << " seconds" << endl;
+        
+        // Write the resultant matrix C to a file
+        ofstream outputFile("mpi_result.txt");
+        
+        if (outputFile.is_open()) {
+            for (int i = 0; i < N; i++) {
+                for (int j = 0; j < N; j++) {
+                    outputFile << C[i][j] << " ";
+                }
+                outputFile << "\n";
+            }
+            outputFile.close();
+            cout << "The final result of matrix multiplication (C matrix) has been written to mpi_result.txt" << endl;
+        } else {
+            cerr << "Unable to open file for writing." << endl;
+        }
+    }
+    
+    // Finalize MPI
+    MPI_Finalize();
+    
+    return 0;
+}
